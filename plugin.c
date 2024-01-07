@@ -5,6 +5,7 @@
 #include <sys/time.h>
 #include <sys/uio.h>
 #include <unistd.h>
+#include <glib.h>
 
 #include <qemu-plugin.h>
 
