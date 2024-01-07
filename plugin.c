@@ -1,3 +1,6 @@
+// This plugin has been written to support QEMU version 8.2.0
+// Using other versions might break it
+
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -18,8 +21,6 @@ struct ctx
 {
 	// The FD of the output file
 	int out_fd;
-	// Registers context
-	struct qemu_plugin_reg_ctx *reg_ctx;
 	// The delay between each sample to be collected in microseconds
 	suseconds_t sample_delay;
 	// The timestamp of the next sample to collect
@@ -28,20 +29,58 @@ struct ctx
 
 static struct ctx ctx;
 
+// The usage of internal QEMU functions are hacks addressing the limitations of
+// TCG plugins. Even though the public API is allowed to change from one version
+// to another, those are even more prone to break
+
+// Internal QEMU function. Returns the CPU with the given ID.
+extern void *qemu_get_cpu(int index);
 // Internal QEMU function. Allows to read or write guest memory.
-void cpu_physical_memory_rw(uint64_t addr, uint8_t *buf,
-                            uint64_t len, int is_write);
+extern int cpu_memory_rw_debug(void *cpu, uint64_t addr,
+                               void *ptr, uint64_t len, bool is_write);
+
+// Returns the value of the register with the given ID.
+static uint64_t get_cpu_register_val(void *cpu, unsigned int id)
+{
+	/*
+	 * Registers are not directly accessible, so we need a hack.
+	 * Under i386, the CPU structure looks like this:
+	 *
+	 * struct ArchCPU {
+	 *	CPUState parent_obj;
+	 *
+	 *	CPUX86State env;
+	 *	// ...
+	 * };
+	 *
+	 * The CPUX86State structure looks like this:
+	 *
+	 * typedef struct CPUArchState {
+	 * 	target_ulong regs[CPU_NB_REGS];
+	 *	// ...
+	 * } CPUX86State;
+	 *
+	 * Standard registers are located in the array above.
+	 *
+	 * Tip: In C, you can get the size of a type at compile time by using:
+	 * https://stackoverflow.com/a/35261673
+	 */
+
+	// TODO adapt size to architecture
+	const size_t REGS_OFF = 0; // TODO
+	const size_t REG_SIZE = 4;
+	return *(uint32_t *) (cpu + REGS_OFF + id * REG_SIZE);
+}
 
 // This is used as a clock to perform sampling
-static void vcpu_insn_exec(unsigned int cpu_index, void *udata)
+static void vcpu_insn_exec(unsigned int cpu_index, void *eip)
 {
 	// If the delay isn't expired, ignore
 	struct timeval tv;
 	gettimeofday(&tv, NULL);
-	if (
-		tv.tv_sec < ctx.next_sample_ts.tv_sec
-			|| (tv.tv_sec == ctx.next_sample_ts.tv_sec && tv.tv_usec < ctx.next_sample_ts.tv_usec)
-	)
+	if (tv.tv_sec < ctx.next_sample_ts.tv_sec
+		|| (tv.tv_sec == ctx.next_sample_ts.tv_sec
+		&& tv.tv_usec < ctx.next_sample_ts.tv_usec))
 		return;
 	ctx.next_sample_ts = tv;
 	ctx.next_sample_ts.tv_sec += ctx.sample_delay / 1000000;
@@ -50,13 +89,12 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata)
 	// The sample delay has expired. Read the stack and write it to the output file
 
 	// Get registers
-	qemu_plugin_regs_load(ctx.reg_ctx);
-	uint64_t eip = (uint64_t) qemu_plugin_reg_ptr(ctx.reg_ctx, 8);
-	uint64_t ebp = (uint64_t) qemu_plugin_reg_ptr(ctx.reg_ctx, 6);
+	void *cpu = qemu_get_cpu(cpu_index);
+	uint64_t ebp = get_cpu_register_val(cpu, 6);
 
 	// Iterate through stack
 	uint64_t frames_buf[MAX_DEPTH];
-	frames_buf[0] = eip;
+	frames_buf[0] = (uint64_t) eip;
 	uint8_t i;
 	for (i = 1; i < MAX_DEPTH; ++i)
 	{
@@ -69,11 +107,11 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata)
 		// TODO do only one read in memory
 
 		// Get function address (return address on the stack)
-		cpu_physical_memory_rw(ebp + 4, buf, sizeof(buf), 0); // TODO 64 bits
+		cpu_memory_rw_debug(cpu, ebp + 4, buf, sizeof(buf), 0); // TODO 64 bits
 		frames_buf[i] = *(uint64_t *) &buf[0];
 
 		// Get next frame
-		cpu_physical_memory_rw(ebp, buf, sizeof(buf), 0);
+		cpu_memory_rw_debug(cpu, ebp, buf, sizeof(buf), 0);
 		ebp = *(uint64_t *) &buf[0];
 	}
 
@@ -110,8 +148,6 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 
 static void plugin_exit(qemu_plugin_id_t id, void *p)
 {
-	qemu_plugin_reg_free_context(ctx.reg_ctx);
-
 	// TODO ensure everything is written to file
 	close(ctx.out_fd);
 }
@@ -135,8 +171,6 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
 		dprintf(STDERR_FILENO, "qemu: %s: %s", out_path, strerror(errno));
 		return 1;
 	}
-
-	ctx.reg_ctx = qemu_plugin_reg_create_context(X86_64_REGS, sizeof(X86_64_REGS) / sizeof(X86_64_REGS[0]));
 
 	// Init timing
 	ctx.sample_delay = 0; // TODO take from arg
