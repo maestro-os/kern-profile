@@ -67,7 +67,7 @@ static uint64_t get_cpu_register_val(void *cpu, unsigned int id)
 	 */
 
 	// TODO adapt size to architecture
-	const size_t REGS_OFF = 0; // TODO
+	const size_t REGS_OFF = 10176;
 	const size_t REG_SIZE = 4;
 	return *(uint32_t *) (cpu + REGS_OFF + id * REG_SIZE);
 }
@@ -107,11 +107,16 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *eip)
 		// TODO do only one read in memory
 
 		// Get function address (return address on the stack)
-		cpu_memory_rw_debug(cpu, ebp + 4, buf, sizeof(buf), 0); // TODO 64 bits
+		// TODO 64 bits
+		int success = cpu_memory_rw_debug(cpu, ebp + 4, buf, sizeof(buf), 0);
+		if (!success)
+			break;
 		frames_buf[i] = *(uint64_t *) &buf[0];
 
 		// Get next frame
-		cpu_memory_rw_debug(cpu, ebp, buf, sizeof(buf), 0);
+		success = cpu_memory_rw_debug(cpu, ebp, buf, sizeof(buf), 0);
+		if (!success)
+			break;
 		ebp = *(uint64_t *) &buf[0];
 	}
 
