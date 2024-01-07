@@ -1,7 +1,10 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/time.h>
+#include <sys/uio.h>
+#include <unistd.h>
 
 #include <qemu-plugin.h>
 
@@ -40,44 +43,53 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata)
 	)
 		return;
 	ctx.next_sample_ts = tv;
-	ctx.next_sample_ts.tv_sec += sample_delay / 1000000;
-	ctx.next_sample_ts.tv_usec += sample_delay % 1000000;
+	ctx.next_sample_ts.tv_sec += ctx.sample_delay / 1000000;
+	ctx.next_sample_ts.tv_usec += ctx.sample_delay % 1000000;
 
 	// The sample delay has expired. Read the stack and write it to the output file
 
 	// Get registers
-	qemu_plugin_regs_load(ctx->reg_ctx);
-	void *eip = qemu_plugin_reg_ptr(ctx->reg_ctx, 8);
-	void *esp = qemu_plugin_reg_ptr(ctx->reg_ctx, 7);
-	void *ebp = qemu_plugin_reg_ptr(ctx->reg_ctx, 6);
+	qemu_plugin_regs_load(ctx.reg_ctx);
+	uint64_t eip = (uint64_t) qemu_plugin_reg_ptr(ctx.reg_ctx, 8);
+	uint64_t ebp = (uint64_t) qemu_plugin_reg_ptr(ctx.reg_ctx, 6);
 
 	// Iterate through stack
-	struct iovec frames_buf[MAX_DEPTH];
+	uint64_t frames_buf[MAX_DEPTH];
 	frames_buf[0] = eip;
 	uint8_t i;
 	for (i = 1; i < MAX_DEPTH; ++i)
 	{
 		// If reached the end of the stack (exclude code outside of the kernel)
-		if (ebp <= 0xc0000000) // TODO adapt for 64 bits
+		if (ebp <= (uint64_t) 0xc0000000) // TODO 64 bits
 			break;
 
-		char buf[4]; // TODO adapt size for 64 bits
+		char buf[8];
+
+		// TODO do only one read in memory
 
 		// Get function address (return address on the stack)
-		cpu_physical_memory_rw(ebp + sizeof(buf), buf, sizeof(buf), 0);
-		frames_buf[i].iov_base = *(uint32_t *) &buf[0];
-		frames_buf[i].iov_len = sizeof(buf);
+		cpu_physical_memory_rw(ebp + 4, buf, sizeof(buf), 0); // TODO 64 bits
+		frames_buf[i] = *(uint64_t *) &buf[0];
 
 		// Get next frame
 		cpu_physical_memory_rw(ebp, buf, sizeof(buf), 0);
-		ebp = *(uint32_t *) &buf[0];
+		ebp = *(uint64_t *) &buf[0];
 	}
 
-	// Write the number of frames in stack
-	write(out_fd, i, sizeof(i));
-	// TODO check errno
-	// Write frames
-	writev(out_fd, frames_buf, i);
+	// Build iovec
+	struct iovec v[MAX_DEPTH + 1];
+	// Frames count
+	v[0].iov_base = (void *) &i;
+	v[0].iov_len = sizeof(i);
+	size_t j;
+	for (j = 1; j < i + 1; ++j)
+	{
+		v[j].iov_base = (void *) frames_buf[i - 1];
+		v[j].iov_len = sizeof(uint64_t);
+	}
+
+	// TODO loop until everything is written
+	writev(ctx.out_fd, v, j);
 	// TODO check errno
 }
 
@@ -86,60 +98,21 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 {
     size_t n = qemu_plugin_tb_n_insns(tb);
     size_t i;
-
     for (i = 0; i < n; i++) {
         struct qemu_plugin_insn *insn = qemu_plugin_tb_get_insn(tb, i);
-
-        if (do_inline) {
-            qemu_plugin_register_vcpu_insn_exec_inline(
-                insn, QEMU_PLUGIN_INLINE_ADD_U64, &inline_insn_count, 1);
-        } else {
-            uint64_t vaddr = qemu_plugin_insn_vaddr(insn);
-            qemu_plugin_register_vcpu_insn_exec_cb(
-                insn, vcpu_insn_exec, QEMU_PLUGIN_CB_NO_REGS,
-                GUINT_TO_POINTER(vaddr));
-        }
-
-        if (do_size) {
-            size_t sz = qemu_plugin_insn_size(insn);
-            if (sz > sizes->len) {
-                g_array_set_size(sizes, sz);
-            }
-            unsigned long *cnt = &g_array_index(sizes, unsigned long, sz);
-            (*cnt)++;
-        }
-
-        /*
-         * If we are tracking certain instructions we will need more
-         * information about the instruction which we also need to
-         * save if there is a hit.
-         */
-        if (matches) {
-            char *insn_disas = qemu_plugin_insn_disas(insn);
-            int j;
-            for (j = 0; j < matches->len; j++) {
-                Match *m = &g_array_index(matches, Match, j);
-                if (g_str_has_prefix(insn_disas, m->match_string)) {
-                    Instruction *rec = g_new0(Instruction, 1);
-                    rec->disas = g_strdup(insn_disas);
-                    rec->vaddr = qemu_plugin_insn_vaddr(insn);
-                    rec->match = m;
-                    qemu_plugin_register_vcpu_insn_exec_cb(
-                        insn, vcpu_insn_matched_exec_before,
-                        QEMU_PLUGIN_CB_NO_REGS, rec);
-                }
-            }
-            g_free(insn_disas);
-        }
+		uint64_t vaddr = qemu_plugin_insn_vaddr(insn);
+		qemu_plugin_register_vcpu_insn_exec_cb(
+			insn, vcpu_insn_exec, QEMU_PLUGIN_CB_NO_REGS,
+			GUINT_TO_POINTER(vaddr));
     }
 }
 
 static void plugin_exit(qemu_plugin_id_t id, void *p)
 {
-	qemu_plugin_reg_free_context(cache->reg_ctx);
+	qemu_plugin_reg_free_context(ctx.reg_ctx);
 
 	// TODO ensure everything is written to file
-	close(out_fd);
+	close(ctx.out_fd);
 }
 
 QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
@@ -148,25 +121,25 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
 {
 	if (argc == 0)
 	{
-		fprintf(STDERR_FILENO, "TODO: error message"); // TODO
+		dprintf(STDERR_FILENO, "TODO: error message"); // TODO
 		return 1;
 	}
 	// TODO take sample rate as argument
 
 	// Open output file
 	char *out_path = argv[0];
-	out_fd = open(out_path, O_CREAT | O_TRUNC);
+	ctx.out_fd = open(out_path, O_CREAT | O_TRUNC);
 	if (errno)
 	{
-		fprintf(STDERR_FILENO, "qemu: %s: %s", out_path, strerror(errno));
+		dprintf(STDERR_FILENO, "qemu: %s: %s", out_path, strerror(errno));
 		return 1;
 	}
 
 	ctx.reg_ctx = qemu_plugin_reg_create_context(X86_64_REGS, sizeof(X86_64_REGS) / sizeof(X86_64_REGS[0]));
 
 	// Init timing
-	sample_delay = 0; // TODO take from arg
-	gettimeofday(&last_sample_ts, NULL);
+	ctx.sample_delay = 0; // TODO take from arg
+	gettimeofday(&ctx.next_sample_ts, NULL);
 
     qemu_plugin_register_vcpu_tb_trans_cb(id, vcpu_tb_trans);
     qemu_plugin_register_atexit_cb(id, plugin_exit, NULL);
