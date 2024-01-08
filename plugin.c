@@ -133,8 +133,10 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *eip)
 	}
 
 	// TODO loop until everything is written
+	errno = 0;
 	writev(ctx.out_fd, v, j);
-	// TODO check errno
+	if (errno)
+		dprintf(STDERR_FILENO, "warning: could not write to output file: %s\n", strerror(errno));
 }
 
 // Executed each time a block of instructions is translated
@@ -153,7 +155,6 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 
 static void plugin_exit(qemu_plugin_id_t id, void *p)
 {
-	// TODO ensure everything is written to file
 	close(ctx.out_fd);
 }
 
@@ -161,16 +162,16 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
                                            const qemu_info_t *info,
                                            int argc, char **argv)
 {
-	if (argc == 0)
+	if (argc < 2)
 	{
-		dprintf(STDERR_FILENO, "TODO: error message"); // TODO
+		dprintf(STDERR_FILENO, "You must specify a path to an output file and a sample delay!\n");
 		return 1;
 	}
-	// TODO take sample rate as argument
 
 	// Open output file
 	char *out_path = argv[0];
-	ctx.out_fd = open(out_path, O_CREAT | O_TRUNC);
+	errno = 0;
+	ctx.out_fd = open(out_path, O_CREAT | O_TRUNC | O_WRONLY, 0666);
 	if (errno)
 	{
 		dprintf(STDERR_FILENO, "qemu: %s: %s", out_path, strerror(errno));
@@ -178,7 +179,7 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
 	}
 
 	// Init timing
-	ctx.sample_delay = 0; // TODO take from arg
+	ctx.sample_delay = atoi(argv[1]);
 	gettimeofday(&ctx.next_sample_ts, NULL);
 
     qemu_plugin_register_vcpu_tb_trans_cb(id, vcpu_tb_trans);
