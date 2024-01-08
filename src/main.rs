@@ -4,6 +4,7 @@
 use elf::endian::AnyEndian;
 use elf::ElfBytes;
 use elf::ParseError;
+use rustc_demangle::demangle;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::env;
@@ -20,7 +21,7 @@ use std::process::exit;
 /// Loads the symbols list, sorted by address.
 ///
 /// If no symbol table is present, the function returns `None`.
-fn list_symbols(elf_buf: &[u8]) -> Result<Option<Vec<(u64, u64, &str)>>, ParseError> {
+fn list_symbols(elf_buf: &[u8]) -> Result<Option<Vec<(u64, u64, String)>>, ParseError> {
     let elf = ElfBytes::<AnyEndian>::minimal_parse(&elf_buf)?;
     let symbol_table = elf.symbol_table()?;
     let Some((symbol_table, string_table)) = symbol_table else {
@@ -33,8 +34,8 @@ fn list_symbols(elf_buf: &[u8]) -> Result<Option<Vec<(u64, u64, &str)>>, ParseEr
             let addr = sym.st_value;
             let size = sym.st_size;
             let name = string_table.get(sym.st_name as _)?;
-            // TODO unmangle name
-            Ok::<(u64, u64, &str), ParseError>((addr, size, name))
+            let name = format!("{:#}", demangle(name));
+            Ok::<(u64, u64, String), ParseError>((addr, size, name))
         })
         .collect::<Result<Vec<_>, _>>()?;
     syms.sort_unstable_by(|s1, s2| s1.0.cmp(&s2.0).then_with(|| s1.1.cmp(&s2.1)));
@@ -42,19 +43,19 @@ fn list_symbols(elf_buf: &[u8]) -> Result<Option<Vec<(u64, u64, &str)>>, ParseEr
 }
 
 /// Returns the name of the symbol in which the address is located.
-fn find_symbol<'s>(symbols: &[(u64, u64, &'s str)], addr: u64) -> Option<&'s str> {
+fn find_symbol<'s>(symbols: &'s [(u64, u64, String)], addr: u64) -> Option<&'s str> {
     let index = symbols
         .binary_search_by(|(start, size, _)| {
             if addr < *start {
-                Ordering::Less
-            } else if addr >= *start + *size {
                 Ordering::Greater
+            } else if addr >= *start + *size {
+                Ordering::Less
             } else {
                 Ordering::Equal
             }
         })
         .ok()?;
-    Some(symbols[index].2)
+    Some(symbols[index].2.as_str())
 }
 
 fn main() -> io::Result<()> {

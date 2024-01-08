@@ -111,13 +111,13 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *eip)
 		int success = cpu_memory_rw_debug(cpu, ebp + 4, buf, sizeof(buf), 0);
 		if (!success)
 			break;
-		frames_buf[i] = *(uint64_t *) &buf[0];
+		frames_buf[i] = *(uint32_t *) &buf[0];
 
 		// Get next frame
 		success = cpu_memory_rw_debug(cpu, ebp, buf, sizeof(buf), 0);
 		if (!success)
 			break;
-		ebp = *(uint64_t *) &buf[0];
+		ebp = *(uint32_t *) &buf[0];
 	}
 
 	// Build iovec
