@@ -102,7 +102,7 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *eip)
 		if (ebp <= (uint64_t) 0xc0000000) // TODO 64 bits
 			break;
 
-		char buf[8];
+		char buf[4]; // TODO 64 bits
 
 		// TODO do only one read in memory
 
@@ -121,20 +121,17 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *eip)
 	}
 
 	// Build iovec
-	struct iovec v[MAX_DEPTH + 1];
+	struct iovec v[2];
 	// Frames count
 	v[0].iov_base = (void *) &i;
 	v[0].iov_len = sizeof(i);
-	size_t j;
-	for (j = 1; j < i + 1; ++j)
-	{
-		v[j].iov_base = (void *) frames_buf[i - 1];
-		v[j].iov_len = sizeof(uint64_t);
-	}
+	// Frames
+	v[1].iov_base = (void *) &frames_buf[0];
+	v[1].iov_len = i * sizeof(uint64_t);
 
 	// TODO loop until everything is written
 	errno = 0;
-	writev(ctx.out_fd, v, j);
+	writev(ctx.out_fd, v, 2);
 	if (errno)
 		dprintf(STDERR_FILENO, "warning: could not write to output file: %s\n", strerror(errno));
 }
@@ -162,14 +159,28 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
                                            const qemu_info_t *info,
                                            int argc, char **argv)
 {
-	if (argc < 2)
+	// Default values
+	char *out_path = "qemu-profile";
+	suseconds_t sample_delay = 10;
+	// Parse arguments
+	for (size_t i = 0; i < argc; ++i)
 	{
-		dprintf(STDERR_FILENO, "You must specify a path to an output file and a sample delay!\n");
-		return 1;
+        char *name = argv[i];
+        char *name_end = strchr(name, '=');
+		char *val = name_end + 1;
+		*name_end = '\0';
+		if (g_strcmp0(name, "out") == 0)
+			out_path = val;
+		else if (g_strcmp0(name, "delay") == 0)
+			sample_delay = atoi(val);
+		else
+		{
+			dprintf(STDERR_FILENO, "invalid argument: %s\n", name);
+			return -1;
+		}
 	}
 
 	// Open output file
-	char *out_path = argv[0];
 	errno = 0;
 	ctx.out_fd = open(out_path, O_CREAT | O_TRUNC | O_WRONLY, 0666);
 	if (errno)
@@ -179,7 +190,7 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
 	}
 
 	// Init timing
-	ctx.sample_delay = atoi(argv[1]);
+	ctx.sample_delay = sample_delay;
 	gettimeofday(&ctx.next_sample_ts, NULL);
 
     qemu_plugin_register_vcpu_tb_trans_cb(id, vcpu_tb_trans);
