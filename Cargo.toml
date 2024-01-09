@@ -4,5 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+anyhow = "1.0.79"
 elf = "0.7.4"
 rustc-demangle = "0.1.23"

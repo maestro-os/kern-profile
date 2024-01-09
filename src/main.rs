@@ -1,6 +1,7 @@
 #![feature(iter_array_chunks)]
 #![feature(iter_intersperse)]
 
+use anyhow::Result;
 use elf::endian::AnyEndian;
 use elf::ElfBytes;
 use elf::ParseError;
@@ -21,7 +22,8 @@ use std::process::exit;
 /// Loads the symbols list, sorted by address.
 ///
 /// If no symbol table is present, the function returns `None`.
-fn list_symbols(elf_buf: &[u8]) -> Result<Option<Vec<(u64, u64, String)>>, ParseError> {
+fn list_symbols(elf_path: &OsString) -> Result<Option<Vec<(u64, u64, String)>>> {
+    let elf_buf = fs::read(elf_path)?;
     let elf = ElfBytes::<AnyEndian>::minimal_parse(&elf_buf)?;
     let symbol_table = elf.symbol_table()?;
     let Some((symbol_table, string_table)) = symbol_table else {
@@ -43,7 +45,7 @@ fn list_symbols(elf_buf: &[u8]) -> Result<Option<Vec<(u64, u64, String)>>, Parse
 }
 
 /// Returns the name of the symbol in which the address is located.
-fn find_symbol<'s>(symbols: &'s [(u64, u64, String)], addr: u64) -> Option<&'s str> {
+fn find_symbol(symbols: &[(u64, u64, String)], addr: u64) -> Option<&str> {
     let index = symbols
         .binary_search_by(|(start, size, _)| {
             if addr < *start {
@@ -71,9 +73,8 @@ fn main() -> io::Result<()> {
     let mut iter = reader.bytes();
 
     // Read elf
-    let elf_buf = fs::read(elf_path)?;
     // TODO handle error
-    let Some(symbols) = list_symbols(&elf_buf).unwrap() else {
+    let Some(symbols) = list_symbols(elf_path).unwrap() else {
         eprintln!("ELF does not have a symbol table!");
         exit(1);
     };
@@ -126,7 +127,7 @@ fn main() -> io::Result<()> {
         for b in buff {
             writer.write_all(&[*b])?;
         }
-        write!(writer, " {count}\n")?;
+        writeln!(writer, " {count}")?;
     }
 
     Ok(())
