@@ -84,16 +84,14 @@ fn fold_stacks<'s>(
     while let Some(stack_depth) = iter.next() {
         // Read and convert to symbols
         let stack_depth = stack_depth? as usize;
-        let mut frames: Vec<_> = iter
+        let mut frames = iter
             .by_ref()
             .take(stack_depth * size_of::<u64>())
             .map(|r| r.unwrap()) // TODO handle error
             .array_chunks()
             .map(u64::from_ne_bytes)
             .map(|addr| find_symbol(symbols, addr))
-            .collect();
-        frames.reverse();
-        let mut frames = frames.into_iter().peekable();
+            .peekable();
 
         // Subdivide stack into substacks (interruptions handling)
         while frames.peek().is_some() {
@@ -141,6 +139,7 @@ fn main() -> io::Result<()> {
     for (frames, count) in folded_stacks {
         let buff = frames
             .iter()
+            .rev()
             .map(|f| f.as_bytes())
             .intersperse(&[b';'])
             .flatten();

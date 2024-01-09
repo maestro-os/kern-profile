@@ -7,3 +7,6 @@ edition = "2021"
 anyhow = "1.0.79"
 elf = "0.7.4"
 rustc-demangle = "0.1.23"
+
+[profile.release]
+lto = true
