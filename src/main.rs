@@ -80,6 +80,7 @@ fn main() -> io::Result<()> {
 
     let mut folded_stacks: HashMap<Vec<&str>, usize> = HashMap::new();
     while let Some(stack_depth) = iter.next() {
+        // Read and convert to symbols
         let stack_depth = stack_depth? as usize;
         let mut frames: Vec<_> = iter
             .by_ref()
@@ -87,14 +88,28 @@ fn main() -> io::Result<()> {
             .map(|r| r.unwrap()) // TODO handle error
             .array_chunks()
             .map(u64::from_ne_bytes)
-            .map(|addr| find_symbol(&symbols, addr).unwrap_or("???"))
+            .map(|addr| find_symbol(&symbols, addr))
             .collect();
         frames.reverse();
-        // Increment counter
-        if let Some(c) = folded_stacks.get_mut(&frames) {
-            *c += 1;
-        } else {
-            folded_stacks.insert(frames, 1);
+        let mut frames = frames.into_iter().peekable();
+
+        // Subdivide stack into substacks (interruptions handling)
+        while frames.peek().is_some() {
+            let substack: Vec<_> = frames
+                .by_ref()
+                .take_while(Option::is_some)
+                .map(|f| f.unwrap())
+                .collect();
+            if substack.is_empty() {
+                continue;
+            }
+
+            // Increment counter
+            if let Some(c) = folded_stacks.get_mut(&substack) {
+                *c += 1;
+            } else {
+                folded_stacks.insert(substack, 1);
+            }
         }
     }
 
