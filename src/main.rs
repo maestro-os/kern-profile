@@ -17,12 +17,19 @@ use std::io::BufReader;
 use std::io::BufWriter;
 use std::io::Read;
 use std::io::Write;
+use std::mem::size_of;
 use std::process::exit;
+
+struct Symbol {
+    addr: u64,
+    size: u64,
+    name: String,
+}
 
 /// Loads the symbols list, sorted by address.
 ///
 /// If no symbol table is present, the function returns `None`.
-fn list_symbols(elf_path: &OsString) -> Result<Option<Vec<(u64, u64, String)>>> {
+fn list_symbols(elf_path: &OsString) -> Result<Option<Vec<Symbol>>> {
     let elf_buf = fs::read(elf_path)?;
     let elf = ElfBytes::<AnyEndian>::minimal_parse(&elf_buf)?;
     let symbol_table = elf.symbol_table()?;
@@ -33,31 +40,32 @@ fn list_symbols(elf_path: &OsString) -> Result<Option<Vec<(u64, u64, String)>>> 
     let mut syms = symbol_table
         .iter()
         .map(|sym| {
-            let addr = sym.st_value;
-            let size = sym.st_size;
             let name = string_table.get(sym.st_name as _)?;
-            let name = format!("{:#}", demangle(name));
-            Ok::<(u64, u64, String), ParseError>((addr, size, name))
+            Ok::<_, ParseError>(Symbol {
+                addr: sym.st_value,
+                size: sym.st_size,
+                name: format!("{:#}", demangle(name)),
+            })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    syms.sort_unstable_by(|s1, s2| s1.0.cmp(&s2.0).then_with(|| s1.1.cmp(&s2.1)));
+    syms.sort_unstable_by(|s1, s2| s1.addr.cmp(&s2.addr).then_with(|| s1.size.cmp(&s2.size)));
     Ok(Some(syms))
 }
 
 /// Returns the name of the symbol in which the address is located.
-fn find_symbol(symbols: &[(u64, u64, String)], addr: u64) -> Option<&str> {
+fn find_symbol(symbols: &[Symbol], addr: u64) -> Option<&str> {
     let index = symbols
-        .binary_search_by(|(start, size, _)| {
-            if addr < *start {
+        .binary_search_by(|sym| {
+            if addr < sym.addr {
                 Ordering::Greater
-            } else if addr >= *start + *size {
+            } else if addr >= sym.addr + sym.size {
                 Ordering::Less
             } else {
                 Ordering::Equal
             }
         })
         .ok()?;
-    Some(symbols[index].2.as_str())
+    Some(symbols[index].name.as_str())
 }
 
 /// Count the number of identical stacks.
@@ -65,7 +73,7 @@ fn find_symbol(symbols: &[(u64, u64, String)], addr: u64) -> Option<&str> {
 /// The function returns a hashmap with each stack associated with its number of occurences.
 fn fold_stacks<'s>(
     input_path: &OsString,
-    symbols: &'s [(u64, u64, String)],
+    symbols: &'s [Symbol],
 ) -> io::Result<HashMap<Vec<&'s str>, u64>> {
     // Read profile data
     let input = File::open(input_path)?;
@@ -78,7 +86,7 @@ fn fold_stacks<'s>(
         let stack_depth = stack_depth? as usize;
         let mut frames: Vec<_> = iter
             .by_ref()
-            .take(stack_depth * 8)
+            .take(stack_depth * size_of::<u64>())
             .map(|r| r.unwrap()) // TODO handle error
             .array_chunks()
             .map(u64::from_ne_bytes)
@@ -99,11 +107,7 @@ fn fold_stacks<'s>(
             }
 
             // Increment counter
-            if let Some(c) = folded_stacks.get_mut(&substack) {
-                *c += 1;
-            } else {
-                folded_stacks.insert(substack, 1);
-            }
+            *folded_stacks.entry(substack).or_insert(0) += 1;
         }
     }
     Ok(folded_stacks)
@@ -116,8 +120,15 @@ fn main() -> io::Result<()> {
         exit(1);
     };
 
-    // TODO handle error
-    let Some(symbols) = list_symbols(elf_path).unwrap() else {
+    // Read ELF symbols
+    let symbols = match list_symbols(elf_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Could not read ELF: {e}");
+            exit(1);
+        }
+    };
+    let Some(symbols) = symbols else {
         eprintln!("ELF does not have a symbol table!");
         exit(1);
     };
