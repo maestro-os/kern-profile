@@ -60,26 +60,19 @@ fn find_symbol(symbols: &[(u64, u64, String)], addr: u64) -> Option<&str> {
     Some(symbols[index].2.as_str())
 }
 
-fn main() -> io::Result<()> {
-    let args: Vec<OsString> = env::args_os().collect();
-    let [_, input_path, elf_path, output_path] = &args[..] else {
-        eprintln!("usage: kern-profile <profile file> <elf file> <output file>");
-        exit(1);
-    };
-
+/// Count the number of identical stacks.
+///
+/// The function returns a hashmap with each stack associated with its number of occurences.
+fn fold_stacks<'s>(
+    input_path: &OsString,
+    symbols: &'s [(u64, u64, String)],
+) -> io::Result<HashMap<Vec<&'s str>, u64>> {
     // Read profile data
     let input = File::open(input_path)?;
     let reader = BufReader::new(input);
     let mut iter = reader.bytes();
 
-    // Read elf
-    // TODO handle error
-    let Some(symbols) = list_symbols(elf_path).unwrap() else {
-        eprintln!("ELF does not have a symbol table!");
-        exit(1);
-    };
-
-    let mut folded_stacks: HashMap<Vec<&str>, usize> = HashMap::new();
+    let mut folded_stacks: HashMap<Vec<&str>, u64> = HashMap::new();
     while let Some(stack_depth) = iter.next() {
         // Read and convert to symbols
         let stack_depth = stack_depth? as usize;
@@ -89,7 +82,7 @@ fn main() -> io::Result<()> {
             .map(|r| r.unwrap()) // TODO handle error
             .array_chunks()
             .map(u64::from_ne_bytes)
-            .map(|addr| find_symbol(&symbols, addr))
+            .map(|addr| find_symbol(symbols, addr))
             .collect();
         frames.reverse();
         let mut frames = frames.into_iter().peekable();
@@ -113,6 +106,23 @@ fn main() -> io::Result<()> {
             }
         }
     }
+    Ok(folded_stacks)
+}
+
+fn main() -> io::Result<()> {
+    let args: Vec<OsString> = env::args_os().collect();
+    let [_, input_path, elf_path, output_path] = &args[..] else {
+        eprintln!("usage: kern-profile <profile file> <elf file> <output file>");
+        exit(1);
+    };
+
+    // TODO handle error
+    let Some(symbols) = list_symbols(elf_path).unwrap() else {
+        eprintln!("ELF does not have a symbol table!");
+        exit(1);
+    };
+
+    let folded_stacks = fold_stacks(input_path, &symbols)?;
 
     // Serialize
     let out = File::create(output_path)?;
