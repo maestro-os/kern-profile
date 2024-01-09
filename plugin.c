@@ -90,7 +90,7 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *eip)
 
 	// Get registers
 	void *cpu = qemu_get_cpu(cpu_index);
-	uint64_t ebp = get_cpu_register_val(cpu, 6);
+	uint64_t ebp = get_cpu_register_val(cpu, 5);
 
 	// Iterate through stack
 	uint64_t frames_buf[MAX_DEPTH];
@@ -98,24 +98,23 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *eip)
 	uint8_t i;
 	for (i = 1; i < MAX_DEPTH; ++i)
 	{
-		// If reached the end of the stack (exclude code outside of the kernel)
-		if (ebp <= (uint64_t) 0xc0000000) // TODO 64 bits
-			break;
-
 		char buf[4]; // TODO 64 bits
 
 		// TODO do only one read in memory
 
 		// Get function address (return address on the stack)
 		// TODO 64 bits
-		int success = cpu_memory_rw_debug(cpu, ebp + 4, buf, sizeof(buf), 0);
-		if (!success)
+		int err = cpu_memory_rw_debug(cpu, ebp + 4, buf, sizeof(buf), 0);
+		if (err)
 			break;
 		frames_buf[i] = *(uint32_t *) &buf[0];
+		// If reached the end of the stack (exclude code outside of the kernel)
+		if (frames_buf[i] <= (uint64_t) 0xc0000000) // TODO 64 bits
+			break;
 
 		// Get next frame
-		success = cpu_memory_rw_debug(cpu, ebp, buf, sizeof(buf), 0);
-		if (!success)
+		err = cpu_memory_rw_debug(cpu, ebp, buf, sizeof(buf), 0);
+		if (err)
 			break;
 		ebp = *(uint32_t *) &buf[0];
 	}

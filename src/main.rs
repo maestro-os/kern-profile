@@ -81,7 +81,7 @@ fn main() -> io::Result<()> {
     let mut folded_stacks: HashMap<Vec<&str>, usize> = HashMap::new();
     while let Some(stack_depth) = iter.next() {
         let stack_depth = stack_depth? as usize;
-        let frames: Vec<_> = iter
+        let mut frames: Vec<_> = iter
             .by_ref()
             .take(stack_depth * 8)
             .map(|r| r.unwrap()) // TODO handle error
@@ -89,6 +89,7 @@ fn main() -> io::Result<()> {
             .map(u64::from_ne_bytes)
             .map(|addr| find_symbol(&symbols, addr).unwrap_or("???"))
             .collect();
+        frames.reverse();
         // Increment counter
         if let Some(c) = folded_stacks.get_mut(&frames) {
             *c += 1;
