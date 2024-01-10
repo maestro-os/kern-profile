@@ -137,15 +137,9 @@ fn main() -> io::Result<()> {
     let out = File::create(output_path)?;
     let mut writer = BufWriter::new(out);
     for (frames, count) in folded_stacks {
-        let buff = frames
-            .iter()
-            .rev()
-            .map(|f| f.as_bytes())
-            .intersperse(&[b';'])
-            .flatten();
-        // TODO optimize (write buffers instead of byte-by-byte)
+        let buff = frames.into_iter().rev().intersperse(";");
         for b in buff {
-            writer.write_all(&[*b])?;
+            write!(writer, "{b}")?;
         }
         writeln!(writer, " {count}")?;
     }
