@@ -1,4 +1,4 @@
-This tool allows to profile the CPU usage of a Rust kernel running in QEMU, using flamegraphs.
+This tool allows profiling of the CPU usage of a Rust kernel running in QEMU, using flamegraphs.
 
 It works by sampling the execution of the code at a given rate.
 For each sample, the plugin collects the current callstack of the code being executed.
