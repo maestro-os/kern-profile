@@ -72,4 +72,5 @@ cat flamegraph-input | flamegraph.pl >flamegraph.svg
 The following issues need to be fixed in the future:
 - Only one CPU core is supported
 - Only x86 in 32 bits is supported
+- Only the kernel can be profiled. It is not possible to load/observe several ELF at once (either kernel modules or userspace programs)
 - The plugin does not allow to generate [memory flamegraphs](https://www.brendangregg.com/FlameGraphs/memoryflamegraphs.html)
