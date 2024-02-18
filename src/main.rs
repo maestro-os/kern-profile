@@ -18,7 +18,7 @@ use std::io::BufWriter;
 use std::io::Read;
 use std::io::Write;
 use std::mem::size_of;
-use std::process::exit;
+use std::process::{Command, exit};
 
 struct Symbol {
     addr: u64,
@@ -112,9 +112,23 @@ fn fold_stacks<'s>(
 }
 
 fn main() -> io::Result<()> {
-    let args: Vec<OsString> = env::args_os().collect();
-    let [_, input_path, elf_path, output_path] = &args[..] else {
-        eprintln!("usage: kern-profile <profile file> <elf file> <output file>");
+    let mut args_iter = env::args_os().peekable();
+    // Skip program name
+    args_iter.next();
+    let alloc = args_iter
+        .next_if(|p| p == "--alloc")
+        .map(|_| true)
+        .unwrap_or(false);
+    let args: Vec<OsString> = args_iter.collect();
+    let [_, input_path, elf_path] = &args[..] else {
+        eprintln!("usage: kern-profile [--alloc] <profile file> <elf file>");
+        eprintln!();
+        eprintln!("options:");
+        eprintln!("\t--alloc: if set, the provided profile file contains memory allocator tracing. If not, it contains CPU tracing");
+        eprintln!("\t<profile file>: path to the file containing samples recorded from execution");
+        eprintln!("\t<elf file>: path to the observed kernel");
+        eprintln!();
+        eprintln!("On success, the command writes one or several Flamegraph(s) at `cpu.svg` for CPU tracing, or at `mem-<allocator>.svg` for memory tracing.");
         exit(1);
     };
 
@@ -133,8 +147,20 @@ fn main() -> io::Result<()> {
 
     let folded_stacks = fold_stacks(input_path, &symbols)?;
 
+    // TODO create one flamegraph for each allocator
+    // Run flamegraph
+    let mut cmd = Command::new("flamegraph/Flamegraph");
+    if alloc {
+        cmd.args(&["--colors", "mem"]);
+    }
+    // Redirect output to file
+    let file = File::create("cpu.svg")?;
+    cmd.stdout(file);
+    // Run
+    let child = cmd.spawn()?;
+    let out = child.stdin.unwrap();
+
     // Serialize
-    let out = File::create(output_path)?;
     let mut writer = BufWriter::new(out);
     for (frames, count) in folded_stacks {
         let buff = frames.into_iter().rev().intersperse(";");
