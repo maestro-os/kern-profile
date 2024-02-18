@@ -6,19 +6,19 @@ use elf::endian::AnyEndian;
 use elf::ElfBytes;
 use elf::ParseError;
 use rustc_demangle::demangle;
-use std::cmp::Ordering;
+use std::cmp::{max, Ordering};
 use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::fs::File;
 use std::io;
-use std::io::BufReader;
 use std::io::BufWriter;
 use std::io::Read;
 use std::io::Write;
+use std::io::{BufReader, Bytes};
 use std::mem::size_of;
-use std::process::{Command, exit};
+use std::process::{exit, Command};
 
 struct Symbol {
     addr: u64,
@@ -68,31 +68,43 @@ fn find_symbol(symbols: &[Symbol], addr: u64) -> Option<&str> {
     Some(symbols[index].name.as_str())
 }
 
+/// TODO doc
+fn stack_iter<'i, 's: 'i, I: Iterator<Item = io::Result<u8>>>(
+    iter: &'i mut I,
+    symbols: &'s [Symbol],
+) -> io::Result<impl Iterator<Item = Option<&'s str>> + 'i> {
+    let Some(stack_depth) = iter.next().transpose()? else {
+        // TODO
+        todo!()
+    };
+    let stack_depth = stack_depth as usize;
+    Ok(iter
+        .take(stack_depth * size_of::<u64>())
+        .map(|r| r.unwrap()) // TODO handle error
+        .array_chunks()
+        .map(u64::from_le_bytes)
+        .map(|addr| find_symbol(symbols, addr)))
+}
+
+/// TODO doc
+fn next_u64<I: Iterator<Item = io::Result<u8>>>(iter: &mut I) -> io::Result<Option<u64>> {
+    Ok(iter
+        .map(|r| r.unwrap()) // TODO handle error
+        .array_chunks()
+        .map(u64::from_le_bytes)
+        .next())
+}
+
+type FoldedStacks<'s> = HashMap<Vec<&'s str>, u64>;
+
 /// Count the number of identical stacks.
 ///
-/// The function returns a hashmap with each stack associated with its number of occurences.
-fn fold_stacks<'s>(
-    input_path: &OsString,
-    symbols: &'s [Symbol],
-) -> io::Result<HashMap<Vec<&'s str>, u64>> {
-    // Read profile data
-    let input = File::open(input_path)?;
-    let reader = BufReader::new(input);
-    let mut iter = reader.bytes();
-
-    let mut folded_stacks: HashMap<Vec<&str>, u64> = HashMap::new();
-    while let Some(stack_depth) = iter.next() {
-        // Read and convert to symbols
-        let stack_depth = stack_depth? as usize;
-        let mut frames = iter
-            .by_ref()
-            .take(stack_depth * size_of::<u64>())
-            .map(|r| r.unwrap()) // TODO handle error
-            .array_chunks()
-            .map(u64::from_ne_bytes)
-            .map(|addr| find_symbol(symbols, addr))
-            .peekable();
-
+/// The function returns a hashmap with each stack associated with its number of occurrences.
+fn fold_stacks_cpu(iter: Bytes<BufReader<File>>, symbols: &[Symbol]) -> io::Result<FoldedStacks> {
+    let mut iter = iter.peekable();
+    let mut folded_stacks: FoldedStacks = HashMap::new();
+    while iter.peek().is_some() {
+        let mut frames = stack_iter(&mut iter, symbols)?.peekable();
         // Subdivide stack into substacks (interruptions handling)
         while frames.peek().is_some() {
             let substack: Vec<_> = frames
@@ -103,12 +115,67 @@ fn fold_stacks<'s>(
             if substack.is_empty() {
                 continue;
             }
-
             // Increment counter
             *folded_stacks.entry(substack).or_insert(0) += 1;
         }
     }
     Ok(folded_stacks)
+}
+
+/// TODO doc
+fn fold_stacks_memory(
+    iter: Bytes<BufReader<File>>,
+    symbols: &[Symbol],
+    accumulate: bool,
+) -> io::Result<HashMap<String, FoldedStacks>> {
+    let mut iter = iter.peekable();
+    let mut allocators: HashMap<String, HashMap<u64, (Vec<&str>, u64)>> = HashMap::new();
+    while let Some(alloc_name_len) = iter.next() {
+        let alloc_name_len = alloc_name_len? as usize;
+        let name = iter
+            .by_ref()
+            .take(alloc_name_len)
+            .map(|c| c.map(char::from))
+            .collect::<io::Result<String>>()?;
+        let Some(op) = iter.next().transpose()? else {
+            break;
+        };
+        let Some(ptr) = next_u64(&mut iter)? else {
+            break;
+        };
+        let Some(size) = next_u64(&mut iter)? else {
+            break;
+        };
+        let frames = stack_iter(&mut iter, symbols)?
+            .take_while(Option::is_some)
+            .map(|f| f.unwrap())
+            .collect();
+        // Update
+        let entry = allocators.entry(name).or_insert(HashMap::new());
+        let alloc = entry.entry(ptr).or_insert((frames, 0));
+        match (accumulate, op) {
+            // If accumulating is enabled, ignore realloc operations if the resulting size is smaller
+            (true, 1) => alloc.1 = max(alloc.1, size),
+            // If accumulating is enabled, ignore free operations
+            (true, 2) => continue,
+            // Allocate or reallocate
+            (_, 0 | 1) => alloc.1 = size,
+            // Free
+            (_, 2) => alloc.1 = 0,
+            (_, opcode) => panic!("Invalid opcode `{opcode}`"),
+        }
+    }
+    // Fold stacks
+    Ok(allocators
+        .into_iter()
+        .map(|(allocator, allocations)| {
+            let mut stacks = HashMap::new();
+            for (_, (stack, size)) in allocations {
+                *stacks.entry(stack).or_insert(0) += size;
+            }
+            (allocator, stacks)
+        })
+        .collect())
 }
 
 fn main() -> io::Result<()> {
@@ -145,29 +212,44 @@ fn main() -> io::Result<()> {
         exit(1);
     };
 
-    let folded_stacks = fold_stacks(input_path, &symbols)?;
+    // Read profile data
+    let input = File::open(input_path)?;
+    let reader = BufReader::new(input);
+    let iter = reader.bytes();
+    let graphs = if !alloc {
+        let folded_stacks = fold_stacks_cpu(iter, &symbols)?;
+        vec![("cpu.svg".into(), folded_stacks)]
+    } else {
+        // TODO support accumulate mode
+        let folded_stacks = fold_stacks_memory(iter, &symbols, false)?;
+        folded_stacks
+            .into_iter()
+            .map(|(name, stacks)| (format!("mem-{name}.svg"), stacks))
+            .collect()
+    };
 
-    // TODO create one flamegraph for each allocator
-    // Run flamegraph
-    let mut cmd = Command::new("flamegraph/Flamegraph");
-    if alloc {
-        cmd.args(&["--colors", "mem"]);
-    }
-    // Redirect output to file
-    let file = File::create("cpu.svg")?;
-    cmd.stdout(file);
-    // Run
-    let child = cmd.spawn()?;
-    let out = child.stdin.unwrap();
-
-    // Serialize
-    let mut writer = BufWriter::new(out);
-    for (frames, count) in folded_stacks {
-        let buff = frames.into_iter().rev().intersperse(";");
-        for b in buff {
-            write!(writer, "{b}")?;
+    // Produce flamegraphs
+    for (output, stacks) in graphs {
+        // Run flamegraph
+        let mut cmd = Command::new("FlameGraph/flamegraph.pl");
+        if alloc {
+            cmd.args(&["--colors", "mem"]);
         }
-        writeln!(writer, " {count}")?;
+        // Redirect output to file
+        let file = File::create(output)?;
+        cmd.stdout(file);
+        // Run
+        let child = cmd.spawn()?;
+        // Serialize output
+        let out = child.stdin.unwrap();
+        let mut writer = BufWriter::new(out);
+        for (frames, count) in stacks {
+            let buff = frames.into_iter().rev().intersperse(";");
+            for b in buff {
+                write!(writer, "{b}")?;
+            }
+            writeln!(writer, " {count}")?;
+        }
     }
 
     Ok(())
