@@ -18,7 +18,7 @@ use std::io::Read;
 use std::io::Write;
 use std::io::{BufReader, Bytes};
 use std::mem::size_of;
-use std::process::{exit, Command};
+use std::process::{exit, Command, Stdio};
 
 struct Symbol {
     addr: u64,
@@ -182,12 +182,9 @@ fn main() -> io::Result<()> {
     let mut args_iter = env::args_os().peekable();
     // Skip program name
     args_iter.next();
-    let alloc = args_iter
-        .next_if(|p| p == "--alloc")
-        .map(|_| true)
-        .unwrap_or(false);
+    let alloc = args_iter.next_if(|p| p == "--alloc").is_some();
     let args: Vec<OsString> = args_iter.collect();
-    let [_, input_path, elf_path] = &args[..] else {
+    let [input_path, elf_path] = &args[..] else {
         eprintln!("usage: kern-profile [--alloc] <profile file> <elf file>");
         eprintln!();
         eprintln!("options:");
@@ -235,14 +232,14 @@ fn main() -> io::Result<()> {
         if alloc {
             cmd.args(&["--colors", "mem"]);
         }
+        cmd.stdin(Stdio::piped());
         // Redirect output to file
         let file = File::create(output)?;
         cmd.stdout(file);
         // Run
         let child = cmd.spawn()?;
         // Serialize output
-        let out = child.stdin.unwrap();
-        let mut writer = BufWriter::new(out);
+        let mut writer = BufWriter::new(child.stdin.unwrap());
         for (frames, count) in stacks {
             let buff = frames.into_iter().rev().intersperse(";");
             for b in buff {
