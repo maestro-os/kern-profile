@@ -1,2 +1,3 @@
 kern-profile.so
 /target
+*.svg

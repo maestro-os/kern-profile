@@ -147,8 +147,7 @@ fn fold_stacks_memory(
             break;
         };
         let frames = stack_iter(&mut iter, symbols)?
-            .take_while(Option::is_some)
-            .map(|f| f.unwrap())
+            .map(|s| s.unwrap_or("???"))
             .collect();
         // Update
         let entry = allocators.entry(name).or_insert(HashMap::new());
@@ -157,7 +156,7 @@ fn fold_stacks_memory(
             // If accumulating is enabled, ignore realloc operations if the resulting size is smaller
             (true, 1) => alloc.1 = max(alloc.1, size),
             // If accumulating is enabled, ignore free operations
-            (true, 2) => continue,
+            (true, 2) => {}
             // Allocate or reallocate
             (_, 0 | 1) => alloc.1 = size,
             // Free
