@@ -1,4 +1,32 @@
-This tool allows to profile the CPU usage of a Rust kernel running in QEMU, using flamegraphs.
+This tool allows to profile the CPU usage of a Rust kernel running in QEMU, using flamegraphs. More specifically, this has been written for [Maestro](https://github.com/llenotre/maestro).
+
+The repository contains the following components:
+- a QEMU TCG plugin (written in C) for data acquisition (CPU profiling only)
+- an aggregator (written in Rust) to convert the data into a form that can be processed by `flamegraph.pl`
+
+The aggregator tool outputs SVG one or several SVG file(s) with the desired FlameGraph(s).
+
+
+
+## Build
+
+This section describes building the aggregator tool. CPU profiling also requires building the QEMU plugin.
+
+First, make sure you FlameGraph is present:
+
+```shell
+git submodule init
+```
+
+Then, compile the aggregator:
+
+```sh
+cargo +nightly build --release
+```
+
+
+
+## CPU Profiling
 
 It works by sampling the execution of the code at a given rate.
 For each sample, the plugin collects the current callstack of the code being executed.
@@ -7,23 +35,17 @@ The assumption is made that more time the CPU spends executing a function, the h
 
 Aggregating all the callstacks together allows to build the flamegraph.
 
-The repository contains the following components:
-- a QEMU TCG plugin (written in C) for data acquisition
-- an aggregator (written in Rust) to convert the data into a form that can be processed by `flamegraph.pl`
+
+
+### Requirements
+
+QEMU version 8.2.0 **exactly** is required (for CPU profiling only).
+
+**Note**: another version of QEMU cannot be used because the API is not guaranteed to be consistent from one version to another
 
 
 
-## Requirements
-
-The following programs are required:
-- QEMU version 8.2.0 **exactly**
-- [Flamegraph](https://github.com/brendangregg/FlameGraph)
-
-**Note**: another version of QEMU cannot be used because the API can change from a version to another
-
-
-
-## Build
+### Build
 
 Build the QEMU plugin using:
 
@@ -31,15 +53,9 @@ Build the QEMU plugin using:
 QEMU_SRC=<path to QEMU sources> make
 ```
 
-Then, build the aggregator:
-
-```sh
-cargo build --release
-```
 
 
-
-## Usage
+### Usage
 
 First, make sure the kernel is compiled with the `-Cforce-frame-pointers=yes` option on `rustc`.
 
@@ -56,13 +72,19 @@ Arguments:
 The output file can then be processed by the aggregator:
 
 ```sh
-target/release/kern-profile raw-data <path to kernel ELF> flamegraph-input
+target/release/kern-profile raw-data <path to kernel ELF>
 ```
 
-Then, you can generate the flamegraph with:
+
+
+## Memory profiling
+
+For memory profiling, the tool uses the data output by the `memtrace` feature of the [Maestro kernel](https://github.com/llenotre/maestro).
+
+After collecting memtrace sample, you just have to run the aggregator tool:
 
 ```sh
-cat flamegraph-input | flamegraph.pl >flamegraph.svg
+target/release/kern-profile --alloc <path to memtrace data> <path to kernel ELF>
 ```
 
 
@@ -73,4 +95,3 @@ The following issues need to be fixed in the future:
 - Only one CPU core is supported
 - Only x86 in 32 bits is supported
 - Only the kernel can be profiled. It is not possible to load/observe several ELF at once (either kernel modules or userspace programs)
-- The plugin does not allow to generate [memory flamegraphs](https://www.brendangregg.com/FlameGraphs/memoryflamegraphs.html)
