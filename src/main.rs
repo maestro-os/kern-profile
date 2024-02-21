@@ -122,11 +122,12 @@ fn fold_stacks_cpu(iter: Bytes<BufReader<File>>, symbols: &[Symbol]) -> io::Resu
     Ok(folded_stacks)
 }
 
-/// TODO doc
+/// Counts **net** allocated memory for each stack.
+///
+/// For each allocator, the function returns a hashmap with each stack associated with the quantity of allocated memory.
 fn fold_stacks_memory(
     iter: Bytes<BufReader<File>>,
     symbols: &[Symbol],
-    accumulate: bool,
 ) -> io::Result<HashMap<String, FoldedStacks>> {
     let mut iter = iter.peekable();
     let mut allocators: HashMap<String, HashMap<u64, (Vec<&str>, u64)>> = HashMap::new();
@@ -150,18 +151,14 @@ fn fold_stacks_memory(
             .map(|s| s.unwrap_or("???"))
             .collect();
         // Update
-        let entry = allocators.entry(name).or_insert(HashMap::new());
+        let entry = allocators.entry(name.clone()).or_insert(HashMap::new());
         let alloc = entry.entry(ptr).or_insert((frames, 0));
-        match (accumulate, op) {
-            // If accumulating is enabled, ignore realloc operations if the resulting size is smaller
-            (true, 1) => alloc.1 = max(alloc.1, size),
-            // If accumulating is enabled, ignore free operations
-            (true, 2) => {}
+        match op {
             // Allocate or reallocate
-            (_, 0 | 1) => alloc.1 = size,
+            0 | 1 => alloc.1 = size,
             // Free
-            (_, 2) => alloc.1 = 0,
-            (_, opcode) => panic!("Invalid opcode `{opcode}`"),
+            2 => alloc.1 = 0,
+            opcode => panic!("Invalid opcode `{opcode}`"),
         }
     }
     // Fold stacks
@@ -216,8 +213,7 @@ fn main() -> io::Result<()> {
         let folded_stacks = fold_stacks_cpu(iter, &symbols)?;
         vec![("cpu.svg".into(), folded_stacks)]
     } else {
-        // TODO support accumulate mode
-        let folded_stacks = fold_stacks_memory(iter, &symbols, false)?;
+        let folded_stacks = fold_stacks_memory(iter, &symbols)?;
         folded_stacks
             .into_iter()
             .map(|(name, stacks)| (format!("mem-{name}.svg"), stacks))
