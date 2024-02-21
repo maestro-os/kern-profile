@@ -6,7 +6,7 @@ use elf::endian::AnyEndian;
 use elf::ElfBytes;
 use elf::ParseError;
 use rustc_demangle::demangle;
-use std::cmp::{max, Ordering};
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
@@ -151,7 +151,7 @@ fn fold_stacks_memory(
             .map(|s| s.unwrap_or("???"))
             .collect();
         // Update
-        let entry = allocators.entry(name.clone()).or_insert(HashMap::new());
+        let entry = allocators.entry(name).or_insert(HashMap::new());
         let alloc = entry.entry(ptr).or_insert((frames, 0));
         match op {
             // Allocate or reallocate
