@@ -47,6 +47,8 @@ QEMU version 8.2.0 **exactly** is required (for CPU profiling only).
 
 ### Build
 
+First, go in the `plugin/` directory.
+
 Build the QEMU plugin using:
 
 ```sh
