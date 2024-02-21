@@ -68,16 +68,12 @@ fn find_symbol(symbols: &[Symbol], addr: u64) -> Option<&str> {
     Some(symbols[index].name.as_str())
 }
 
-/// TODO doc
+/// Returns an iterator over a stack in **memtrace** format.
 fn stack_iter<'i, 's: 'i, I: Iterator<Item = io::Result<u8>>>(
     iter: &'i mut I,
     symbols: &'s [Symbol],
 ) -> io::Result<impl Iterator<Item = Option<&'s str>> + 'i> {
-    let Some(stack_depth) = iter.next().transpose()? else {
-        // TODO
-        todo!()
-    };
-    let stack_depth = stack_depth as usize;
+    let stack_depth = iter.next().transpose()?.unwrap_or(0) as usize;
     Ok(iter
         .take(stack_depth * size_of::<u64>())
         .map(|r| r.unwrap()) // TODO handle error
@@ -86,7 +82,7 @@ fn stack_iter<'i, 's: 'i, I: Iterator<Item = io::Result<u8>>>(
         .map(|addr| find_symbol(symbols, addr)))
 }
 
-/// TODO doc
+/// Returns a [`u64`] from the data in the given iterator.
 fn next_u64<I: Iterator<Item = io::Result<u8>>>(iter: &mut I) -> io::Result<Option<u64>> {
     Ok(iter
         .map(|r| r.unwrap()) // TODO handle error
@@ -95,6 +91,7 @@ fn next_u64<I: Iterator<Item = io::Result<u8>>>(iter: &mut I) -> io::Result<Opti
         .next())
 }
 
+/// A set of stacks with the associated number of occurrence for each.
 type FoldedStacks<'s> = HashMap<Vec<&'s str>, u64>;
 
 /// Count the number of identical stacks.
