@@ -1,4 +1,4 @@
-This tool allows to profile the CPU usage of a Rust kernel running in QEMU, using flamegraphs. More specifically, this has been written for [Maestro](https://github.com/llenotre/maestro).
+This tool allows profiling the CPU usage of a Rust kernel running in QEMU, using flamegraphs. More specifically, this has been written for [Maestro](https://github.com/llenotre/maestro).
 
 The repository contains the following components:
 - a QEMU TCG plugin (written in C) for data acquisition (CPU profiling only)
@@ -33,7 +33,7 @@ For each sample, the plugin collects the current callstack of the code being exe
 
 The assumption is made that more time the CPU spends executing a function, the higher is the probability the function shows up in the callstack.
 
-Aggregating all the callstacks together allows to build the flamegraph.
+Aggregating all the callstacks together allows building the flamegraph.
 
 
 
@@ -50,7 +50,7 @@ QEMU version 8.2.0 **exactly** is required (for CPU profiling only).
 Build the QEMU plugin using:
 
 ```sh
-QEMU_SRC=<path to QEMU sources> make
+QEMU_SRC=<path-to-QEMU-sources> make
 ```
 
 
@@ -72,7 +72,7 @@ Arguments:
 The output file can then be processed by the aggregator:
 
 ```sh
-target/release/kern-profile raw-data <path to kernel ELF>
+kern-profile raw-data <path-to-kernel-ELF>
 ```
 
 
@@ -84,7 +84,7 @@ For memory profiling, the tool uses the data output by the `memtrace` feature of
 After collecting memtrace sample, you just have to run the aggregator tool:
 
 ```sh
-target/release/kern-profile --alloc <path to memtrace data> <path to kernel ELF>
+kern-profile --alloc <path-to-memtrace-data> <path-to-kernel-ELF>
 ```
 
 
