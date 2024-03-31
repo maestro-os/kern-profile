@@ -43,6 +43,8 @@ QEMU version 8.2.0 **exactly** is required (for CPU profiling only).
 
 **Note**: another version of QEMU cannot be used because the API is not guaranteed to be consistent from one version to another
 
+If compiling QEMU yourself, the option `--enable-modules` must be passed to `./configure`.
+
 
 
 ### Build
@@ -59,7 +61,9 @@ QEMU_SRC=<path-to-QEMU-sources> make
 
 ### Usage
 
-First, make sure the kernel is compiled with the `-Cforce-frame-pointers=yes` option on `rustc`.
+First, make sure:
+- The kernel is compiled with the option `-Cforce-frame-pointers=yes` on `rustc`
+- Kernel symbols are present (not stripped)
 
 Run QEMU with the plugin by adding the following argument (adapt parameters to your needs):
 
