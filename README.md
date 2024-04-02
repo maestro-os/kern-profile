@@ -16,6 +16,7 @@ First, make sure you FlameGraph is present:
 
 ```shell
 git submodule init
+git submodule update --init --recursive
 ```
 
 Then, compile the aggregator:

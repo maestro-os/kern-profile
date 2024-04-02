@@ -25,6 +25,9 @@ struct ctx
 	suseconds_t sample_delay;
 	// The timestamp of the next sample to collect
 	struct timeval next_sample_ts;
+
+	// sizeof(target_ulong) (include/exec/target_ulong.h)
+	size_t target_ulong_width;
 };
 
 static struct ctx ctx;
@@ -66,10 +69,34 @@ static uint64_t get_cpu_register_val(void *cpu, unsigned int id)
 	 * https://stackoverflow.com/a/35261673
 	 */
 
-	// TODO adapt size to architecture
+	// XXX: The offset is same for x86 and x86_64.
 	const size_t REGS_OFF = 10176;
-	const size_t REG_SIZE = 4;
-	return *(uint32_t *) (cpu + REGS_OFF + id * REG_SIZE);
+
+	switch (ctx.target_ulong_width) {
+		case 4: // 32-bits
+			return *(uint32_t *) (cpu + REGS_OFF + id * ctx.target_ulong_width);
+		case 8: // 64-bits
+			return *(uint64_t *) (cpu + REGS_OFF + id * ctx.target_ulong_width);
+		default:
+			__builtin_unreachable();
+	}
+}
+
+// Returns whether the CPU is in long mode.
+bool in_long_mode(void *cpu) {
+	uint64_t efer;
+	switch (ctx.target_ulong_width) {
+		case 4: // 32-bits
+			efer = *(uint64_t *)(cpu + 0x2960);
+			break;
+		case 8: // 64-bits
+			efer = *(uint64_t *)(cpu + 0x2a18);
+			break;
+		default:
+			__builtin_unreachable();
+	}
+
+	return efer & (1 << 8);
 }
 
 // This is used as a clock to perform sampling
@@ -90,33 +117,44 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *eip)
 
 	// Get registers
 	void *cpu = qemu_get_cpu(cpu_index);
-	uint64_t ebp = get_cpu_register_val(cpu, 5);
+	uint64_t frame_ptr = get_cpu_register_val(cpu, 5);
+
+	bool long_mode = in_long_mode(cpu);
+	uint8_t ptr_width = long_mode ? 8 : 4;
 
 	// Iterate through stack
 	uint64_t frames_buf[MAX_DEPTH];
 	frames_buf[0] = (uint64_t) eip;
 	uint8_t i;
-	for (i = 1; i < MAX_DEPTH; ++i)
-	{
-		char buf[4]; // TODO 64 bits
 
+	char buf[8]; // We'll overallocate for 32-bit. It's fine.
+	for (i = 1; i < MAX_DEPTH; ++i)
+    {
 		// TODO do only one read in memory
 
 		// Get function address (return address on the stack)
-		// TODO 64 bits
-		int err = cpu_memory_rw_debug(cpu, ebp + 4, buf, sizeof(buf), 0);
+		int err = cpu_memory_rw_debug(cpu, frame_ptr + ptr_width, buf, ctx.target_ulong_width, false);
 		if (err)
-			break;
-		frames_buf[i] = *(uint32_t *) &buf[0];
-		// If reached the end of the stack (exclude code outside of the kernel)
-		if (frames_buf[i] <= (uint64_t) 0xc0000000) // TODO 64 bits
 			break;
 
+		if (long_mode) {
+			frames_buf[i] = *(uint64_t *) &buf[0];
+		} else {
+			frames_buf[i] = *(uint32_t *) &buf[0];
+		}
+		
+		// XXX: Any frames outside the kernel are discarded in the parser.
+		//
 		// Get next frame
-		err = cpu_memory_rw_debug(cpu, ebp, buf, sizeof(buf), 0);
+		err = cpu_memory_rw_debug(cpu, frame_ptr, buf, ctx.target_ulong_width, false);
 		if (err)
 			break;
-		ebp = *(uint32_t *) &buf[0];
+
+		if (long_mode) {
+			frame_ptr = *(uint64_t *) &buf[0];
+		} else {
+			frame_ptr = *(uint32_t *) &buf[0];
+		}
 	}
 
 	// Build iovec
@@ -158,6 +196,15 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
                                            const qemu_info_t *info,
                                            int argc, char **argv)
 {
+	if (!strcmp(info->target_name, "x86_64")) {
+		ctx.target_ulong_width = 8;
+	} else if (!strcmp(info->target_name, "i386")) {
+		ctx.target_ulong_width = 4;
+	} else {
+		dprintf(STDERR_FILENO, "unsupported target: %s\n", info->target_name);
+		return -1;
+	}
+
 	// Default values
 	char *out_path = "qemu-profile";
 	suseconds_t sample_delay = 10;
