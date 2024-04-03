@@ -100,5 +100,5 @@ kern-profile --alloc <path-to-memtrace-data> <path-to-kernel-ELF>
 
 The following issues need to be fixed in the future:
 - Only one CPU core is supported
-- Only x86 in 32 bits is supported
+- Only x86 is supported
 - Only the kernel can be profiled. It is not possible to load/observe several ELF at once (either kernel modules or userspace programs)
