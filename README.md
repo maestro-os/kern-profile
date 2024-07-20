@@ -1,10 +1,10 @@
-This tool allows profiling the CPU usage of a Rust kernel running in QEMU, using flamegraphs. More specifically, this has been written for [Maestro](https://github.com/llenotre/maestro).
+This tool allows profiling the CPU usage of a Rust kernel running in QEMU, using FlameGraphs. More specifically, this has been written for [Maestro](https://github.com/maestro-os/maestro).
 
 The repository contains the following components:
 - a QEMU TCG plugin (written in C) for data acquisition (CPU profiling only)
 - an aggregator (written in Rust) to convert the data into a form that can be processed by `flamegraph.pl`
 
-The aggregator tool outputs SVG one or several SVG file(s) with the desired FlameGraph(s).
+The aggregator tool outputs one or several SVG file(s) with the desired FlameGraph(s).
 
 
 
@@ -34,7 +34,7 @@ For each sample, the plugin collects the current callstack of the code being exe
 
 The assumption is made that more time the CPU spends executing a function, the higher is the probability the function shows up in the callstack.
 
-Aggregating all the callstacks together allows building the flamegraph.
+Aggregating all the callstacks together allows building the FlameGraph.
 
 
 
