@@ -81,7 +81,7 @@ static uint64_t get_register_val(struct qemu_plugin_register *reg)
 }
 
 // This is used as a clock to perform sampling
-static void vcpu_insn_exec(unsigned int cpu_index, void *rip)
+static void vcpu_insn_exec(unsigned int vcpu_index, void *rip)
 {
 	// If the delay isn't expired, ignore
 	struct timeval tv;
@@ -97,7 +97,7 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *rip)
 	// The sample delay has expired. Read the stack and write it to the output file
 
 	// Get registers
-	void *cpu = qemu_get_cpu(cpu_index);
+	void *cpu = qemu_get_cpu(vcpu_index);
 	uint64_t frame_ptr = get_register_val(ctx.rsp_handle);
 	bool long_mode = get_register_val(ctx.efer_handle) & (1 << 8);
 	uint8_t ptr_width = long_mode ? 8 : 4;
@@ -116,7 +116,6 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *rip)
 		int err = cpu_memory_rw_debug(cpu, frame_ptr + ptr_width, buf, ctx.target_ulong_width, false);
 		if (err)
 			break;
-
 		if (long_mode) {
 			frames_buf[i] = *(uint64_t *) &buf[0];
 		} else {
@@ -129,7 +128,6 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *rip)
 		err = cpu_memory_rw_debug(cpu, frame_ptr, buf, ctx.target_ulong_width, false);
 		if (err)
 			break;
-
 		if (long_mode) {
 			frame_ptr = *(uint64_t *) &buf[0];
 		} else {
