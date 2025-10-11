@@ -1,6 +1,7 @@
 // This plugin has been written to support QEMU version 8.2.0
 // Using other versions might break it
 
+#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -28,6 +29,9 @@ struct ctx
 
 	// sizeof(target_ulong) (include/exec/target_ulong.h)
 	size_t target_ulong_width;
+
+	struct qemu_plugin_register *efer_handle;
+	struct qemu_plugin_register *rsp_handle;
 };
 
 static struct ctx ctx;
@@ -35,6 +39,9 @@ static struct ctx ctx;
 // The usage of internal QEMU functions are hacks addressing the limitations of
 // TCG plugins. Even though the public API is allowed to change from one version
 // to another, those are even more prone to break
+//
+// QEMU provides the function `qemu_plugin_read_memory_vaddr`, however it does
+// not guarantee all writes to memory have been flushed
 
 // Internal QEMU function. Returns the CPU with the given ID.
 extern void *qemu_get_cpu(int index);
@@ -42,65 +49,39 @@ extern void *qemu_get_cpu(int index);
 extern int cpu_memory_rw_debug(void *cpu, uint64_t addr,
                                void *ptr, uint64_t len, bool is_write);
 
-// Returns the value of the register with the given ID.
-static uint64_t get_cpu_register_val(void *cpu, unsigned int id)
+// Find register handle from name
+static struct qemu_plugin_register *find_reg(GArray *regs, const char *name)
 {
-	/*
-	 * Registers are not directly accessible, so we need a hack.
-	 * Under i386, the CPU structure looks like this:
-	 *
-	 * struct ArchCPU {
-	 *	CPUState parent_obj;
-	 *
-	 *	CPUX86State env;
-	 *	// ...
-	 * };
-	 *
-	 * The CPUX86State structure looks like this:
-	 *
-	 * typedef struct CPUArchState {
-	 * 	target_ulong regs[CPU_NB_REGS];
-	 *	// ...
-	 * } CPUX86State;
-	 *
-	 * Standard registers are located in the array above.
-	 *
-	 * Tip: In C, you can get the size of a type at compile time by using:
-	 * https://stackoverflow.com/a/35261673
-	 */
-
-	// XXX: The offset is same for x86 and x86_64.
-	const size_t REGS_OFF = 10176;
-
-	switch (ctx.target_ulong_width) {
-		case 4: // 32-bits
-			return *(uint32_t *) (cpu + REGS_OFF + id * ctx.target_ulong_width);
-		case 8: // 64-bits
-			return *(uint64_t *) (cpu + REGS_OFF + id * ctx.target_ulong_width);
-		default:
-			__builtin_unreachable();
-	}
+	for (guint i = 1; i < regs->len; ++i) {
+        qemu_plugin_reg_descriptor reg = g_array_index(regs, qemu_plugin_reg_descriptor, i);
+        if (!strcmp(reg.name, name))
+			return reg.handle;
+    }
 }
 
-// Returns whether the CPU is in long mode.
-bool in_long_mode(void *cpu) {
-	uint64_t efer;
-	switch (ctx.target_ulong_width) {
-		case 4: // 32-bits
-			efer = *(uint64_t *)(cpu + 0x2960);
-			break;
-		case 8: // 64-bits
-			efer = *(uint64_t *)(cpu + 0x2a18);
-			break;
-		default:
-			__builtin_unreachable();
-	}
+// Callback at VCPU init to get handles for registers
+static void vcpu_get_reg(qemu_plugin_id_t id, unsigned int vcpu_index)
+{
+	// Retrieve registers of interest
+	GArray *regs = qemu_plugin_get_registers();
+	ctx.efer_handle = find_reg(regs, "efer");
+	ctx.rsp_handle = find_reg(regs, "rsp");
+	g_array_free(regs, 0);
+}
 
-	return efer & (1 << 8);
+static uint64_t get_register_val(struct qemu_plugin_register *reg)
+{
+	GByteArray *arr = g_byte_array_new();
+	int res = qemu_plugin_read_register(reg, arr);
+	assert(res == ctx.target_ulong_width);
+	// Copy
+	uint64_t val = 0;
+	memcpy(&val, arr->data, ctx.target_ulong_width);
+	return val;
 }
 
 // This is used as a clock to perform sampling
-static void vcpu_insn_exec(unsigned int cpu_index, void *eip)
+static void vcpu_insn_exec(unsigned int cpu_index, void *rip)
 {
 	// If the delay isn't expired, ignore
 	struct timeval tv;
@@ -117,16 +98,15 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *eip)
 
 	// Get registers
 	void *cpu = qemu_get_cpu(cpu_index);
-	uint64_t frame_ptr = get_cpu_register_val(cpu, 5);
-
-	bool long_mode = in_long_mode(cpu);
+	uint64_t frame_ptr = get_register_val(ctx.rsp_handle);
+	bool long_mode = get_register_val(ctx.efer_handle) & (1 << 8);
 	uint8_t ptr_width = long_mode ? 8 : 4;
 
 	// Iterate through stack
 	uint64_t frames_buf[MAX_DEPTH];
-	frames_buf[0] = (uint64_t) eip;
-	uint8_t i;
+	frames_buf[0] = (uint64_t) rip;
 
+	uint8_t i;
 	char buf[8]; // We'll overallocate for 32-bit. It's fine.
 	for (i = 1; i < MAX_DEPTH; ++i)
     {
@@ -142,7 +122,7 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *eip)
 		} else {
 			frames_buf[i] = *(uint32_t *) &buf[0];
 		}
-		
+
 		// XXX: Any frames outside the kernel are discarded in the parser.
 		//
 		// Get next frame
@@ -182,7 +162,7 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
         struct qemu_plugin_insn *insn = qemu_plugin_tb_get_insn(tb, i);
 		uint64_t vaddr = qemu_plugin_insn_vaddr(insn);
 		qemu_plugin_register_vcpu_insn_exec_cb(
-			insn, vcpu_insn_exec, QEMU_PLUGIN_CB_NO_REGS,
+			insn, vcpu_insn_exec, QEMU_PLUGIN_CB_R_REGS,
 			GUINT_TO_POINTER(vaddr));
     }
 }
@@ -239,6 +219,7 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
 	ctx.sample_delay = sample_delay;
 	gettimeofday(&ctx.next_sample_ts, NULL);
 
+	qemu_plugin_register_vcpu_init_cb(id, vcpu_get_reg);
     qemu_plugin_register_vcpu_tb_trans_cb(id, vcpu_tb_trans);
     qemu_plugin_register_atexit_cb(id, plugin_exit, NULL);
 	return 0;

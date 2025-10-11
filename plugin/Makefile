@@ -6,7 +6,7 @@ INCLUDE = -I$(QEMU_SRC)/include/qemu \
 	-I/usr/lib/glib-2.0/include
 
 $(NAME).so: Makefile $(SRC)
-	$(CC) $(INCLUDE) $(SRC) -shared -o $@
+	$(CC) $(INCLUDE) $(SRC) -shared -O3 -o $@
 
 clean:
 	rm $(NAME).so
