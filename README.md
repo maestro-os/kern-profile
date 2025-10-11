@@ -40,7 +40,7 @@ Aggregating all the callstacks together allows building the FlameGraph.
 
 ### Requirements
 
-QEMU version 8.2.0 **exactly** is required (for CPU profiling only).
+QEMU version 10.1.1 **exactly** is required (for CPU profiling only).
 
 **Note**: another version of QEMU cannot be used because the API is not guaranteed to be consistent from one version to another
 
